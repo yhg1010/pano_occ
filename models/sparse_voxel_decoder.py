@@ -1,11 +1,14 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from mmcv.runner import BaseModule
 from mmcv.cnn.bricks.transformer import FFN
+from mmcv.cnn import ConvModule
+from mmcv.runner import BaseModule
 from .sparsebev_transformer import SparseBEVSelfAttention, SparseBEVSampling, AdaptiveMixing
 from .utils import DUMP, generate_grid, batch_indexing
 from .bbox.utils import encode_bbox
-
+# from .temporalnet import TemporalNet
 
 def index2point(coords, pc_range, voxel_size):
     """
@@ -117,20 +120,22 @@ class SparseVoxelDecoder(BaseModule):
             DUMP.stage_count = i
             
             interval = 2 ** (self.num_layers - i)  # 8 4 2 1
-
             # bbox from coords
             query_bbox = index2point(query_coord, self.pc_range, voxel_size=0.4)  # [B, N, 3]
             query_bbox = point2bbox(query_bbox, box_size=0.4 * interval)  # [B, N, 6]
             query_bbox = encode_bbox(query_bbox, pc_range=self.pc_range)  # [B, N, 6]
 
             # transformer layer
+            # Modify1: temporal-spatial feat merge: temporal part
             query_feat = layer(query_feat, query_bbox, mlvl_feats, img_metas)  # [B, N, C]
-            
             # upsample 2x
             query_feat = self.lift_feat_heads[i](query_feat)  # [B, N, 8C]
             query_feat_2x, query_coord_2x = upsample(query_feat, query_coord, interval // 2)
-
+            # Modify1: temporal-spatial feat merge: spatial part: first seg head output results and filter different areas of cls,
+            # then choose voxel feat with highest confidence and cluster, 1. filter and sparse 2. self attention
             # sparsify
+            # 2. no topk
+            # first filter empty voxels, adaptative filter empty voxels and low confidence voxels
             occ_pred_2x = self.occ_pred_heads[i](query_feat_2x)  # [B, N*8, 1]
             indices = torch.topk(occ_pred_2x.squeeze(-1), k=self.topk[i], dim=1)[1]  # [B, K]
 
@@ -142,8 +147,8 @@ class SparseVoxelDecoder(BaseModule):
                 seg_pred_2x = self.seg_pred_heads[i](query_feat_2x)  # [B, K, CLS]
             else:
                 seg_pred_2x = None
-
             # TODO: up_coords should be interval=1, scaling should be removed
+            # 2. then introduce prototype feature and filter occupied voxels
             occ_preds.append((
                 torch.div(query_coord_2x, interval // 2, rounding_mode='trunc').long(),
                 occ_pred_2x.squeeze(-1),
@@ -154,9 +159,8 @@ class SparseVoxelDecoder(BaseModule):
 
             query_coord = query_coord_2x.detach()
             query_feat = query_feat_2x.detach()
-
         return occ_preds
-
+    
 
 class SparseVoxelDecoderLayer(BaseModule):
     def __init__(self,
@@ -197,7 +201,7 @@ class SparseVoxelDecoderLayer(BaseModule):
             in_points=num_points * num_frames,
             n_groups=num_groups,
             out_points=num_points * num_frames * num_groups
-        )
+        )     
         self.ffn = FFN(embed_dims, feedforward_channels=embed_dims * 2, ffn_drop=0.1)
         
         self.norm2 = nn.LayerNorm(embed_dims)

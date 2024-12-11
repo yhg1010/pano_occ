@@ -24,6 +24,7 @@ def main():
     parser.add_argument('--override', nargs='+', action=DictAction)
     parser.add_argument('--local_rank', type=int, default=0)
     parser.add_argument('--world_size', type=int, default=1)
+    parser.add_argument('--resume_from', default=None)
     args = parser.parse_args()
 
     # parse configs
@@ -56,24 +57,25 @@ def main():
 
     if local_rank == 0:
         # resume or start a new run
+        # import ipdb; ipdb.set_trace()
         if cfgs.resume_from is not None:
             assert os.path.isfile(cfgs.resume_from)
             work_dir = os.path.dirname(cfgs.resume_from)
         else:
             run_name = args.run_name
-            if not cfgs.debug and run_name == '':
-                run_name = input('Name your run (leave blank for default): ')
+            #if not cfgs.debug and run_name == '':
+            #    run_name = input('Name your run (leave blank for default): ')
             if run_name == '':
                 run_name = datetime.now().strftime("%Y-%m-%d/%H-%M-%S")
 
-            work_dir = os.path.join('outputs', cfgs.model.type, run_name)
-            if os.path.exists(work_dir):  # must be an empty dir
-                if input('Path "%s" already exists, overwrite it? [Y/n] ' % work_dir) == 'n':
-                    print('Bye.')
-                    exit(0)
-                shutil.rmtree(work_dir)
+            work_dir = os.path.join('/horizon-bucket/saturn_v_dev/hongliang.cao/occ_exps', cfgs.model.type, run_name)
+            # if os.path.exists(work_dir):  # must be an empty dir
+            #     # if input('Path "%s" already exists, overwrite it? [Y/n] ' % work_dir) == 'n':
+            #     #     print('Bye.')
+            #     #     exit(0)
+            #     shutil.rmtree(work_dir)
 
-            os.makedirs(work_dir, exist_ok=False)
+            os.makedirs(work_dir, exist_ok=True)
 
         # init logging, backup code
         utils.init_logging(os.path.join(work_dir, 'train.log'), cfgs.debug)
@@ -157,13 +159,14 @@ def main():
             runner.register_hook(DistEvalHook(val_loader, interval=cfgs.eval_config['interval'], gpu_collect=True))
         else:
             runner.register_hook(EvalHook(val_loader, interval=cfgs.eval_config['interval']))
-
-    if cfgs.resume_from is not None:
-        logging.info('Resuming from %s' % cfgs.resume_from)
-        runner.resume(cfgs.resume_from)
+    # import pdb; pdb.set_trace()
+    if args.resume_from is not None:
+        logging.info('Resuming from %s' % args.resume_from)
+        runner.resume(args.resume_from)
 
     elif cfgs.load_from is not None:
         logging.info('Loading checkpoint from %s' % cfgs.load_from)
+        # import pdb; pdb.set_trace()
         if cfgs.revise_keys is not None:
             load_checkpoint(
                 model, cfgs.load_from, map_location='cpu',

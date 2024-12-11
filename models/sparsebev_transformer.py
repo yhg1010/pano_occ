@@ -243,7 +243,7 @@ class SparseBEVSelfAttention(BaseModule):
 
 
 class SparseBEVSampling(BaseModule):
-    def __init__(self, embed_dims=256, num_frames=4, num_groups=4, num_points=8, num_levels=4, pc_range=[], init_cfg=None):
+    def __init__(self, embed_dims=256, num_frames=4, num_groups=4, num_points=8, num_levels=4, pc_range=[], scales=[0.8, 0.9, 1.0, 1.1, 1.2], init_cfg=None):
         super().__init__(init_cfg)
 
         self.num_frames = num_frames
@@ -252,8 +252,14 @@ class SparseBEVSampling(BaseModule):
         self.num_levels = num_levels
         self.pc_range = pc_range
 
+        self.scales = scales
+        self.scales_len = len(scales)
+
         self.sampling_offset = nn.Linear(embed_dims, num_groups * num_points * 3)
-        self.scale_weights = nn.Linear(embed_dims, num_groups * num_points * num_levels)
+        self.scale_weights = nn.Linear(embed_dims, num_groups * num_points * num_levels * self.scales_len)
+        self.scalesChannels = 320
+        self.depthwei = nn.Linear(self.scalesChannels, 2)
+        
 
     def init_weights(self):
         bias = self.sampling_offset.bias.data.view(self.num_groups * self.num_points, 3)
@@ -272,9 +278,14 @@ class SparseBEVSampling(BaseModule):
         sampling_offset = self.sampling_offset(query_feat)
         sampling_offset = sampling_offset.view(B, Q, self.num_groups * self.num_points, 3)
         sampling_points = make_sample_points_from_bbox(query_bbox, sampling_offset, self.pc_range)  # [B, Q, GP, 3]
-        sampling_points = sampling_points.reshape(B, Q, 1, self.num_groups, self.num_points, 3)
-        sampling_points = sampling_points.expand(B, Q, self.num_frames, self.num_groups, self.num_points, 3)
-
+        sampling_points = sampling_points.reshape(B, Q, 1, self.num_groups, self.num_points, 1, 3)
+        sampling_points = sampling_points.expand(B, Q, self.num_frames, self.num_groups, self.num_points, self.scales_len, 3)
+        # sampling_points = sampling_points.unsqueeze(5).repeat(1, 1, 1, 1, 1, self.scales_len, 1)
+        scales = self.scales
+        scales = torch.tensor(scales, dtype=torch.float32)
+        scales = scales.unsqueeze(1).repeat(1, 3).to(sampling_points.device)
+        cur_line_ref_points = sampling_points * scales
+        
         # warp sample points based on velocity
         if query_bbox.shape[-1] > 8:
             time_diff = img_metas[0]['time_diff']  # [B, F]
@@ -289,24 +300,27 @@ class SparseBEVSampling(BaseModule):
             ], dim=-1)
 
         # scale weights
-        scale_weights = self.scale_weights(query_feat).view(B, Q, self.num_groups, 1, self.num_points, self.num_levels)
+        scale_weights = self.scale_weights(query_feat).view(B, Q, self.num_groups, 1, self.num_points, self.scales_len, self.num_levels)
         scale_weights = torch.softmax(scale_weights, dim=-1)
-        scale_weights = scale_weights.expand(B, Q, self.num_groups, self.num_frames, self.num_points, self.num_levels)
+        scale_weights = scale_weights.expand(B, Q, self.num_groups, self.num_frames, self.num_points, self.scales_len, self.num_levels)
 
         # sampling
-        sampled_feats = sampling_4d(
-            sampling_points,
+        sampled_feats, voxel_feat = sampling_4d(
+            cur_line_ref_points,
             mlvl_feats,
             scale_weights,
             img_metas[0]['lidar2img'],
             image_h, image_w
-        )  # [B, Q, G, FP, C]
+        ) # [B, TSC, Q, G, P]
+        refine_feat_w = self.depthwei(sampled_feats.permute(0, 2, 3, 4, 1))
+        updated_sampled_feat = voxel_feat * refine_feat_w[..., 1:].sigmoid()
 
-        return sampled_feats
+        return updated_sampled_feat
 
     def forward(self, query_bbox, query_feat, mlvl_feats, img_metas):
         if self.training and query_feat.requires_grad:
             return cp(self.inner_forward, query_bbox, query_feat, mlvl_feats, img_metas, use_reentrant=False)
+            # return self.inner_forward(query_bbox, query_feat, mlvl_feats, img_metas)
         else:
             return self.inner_forward(query_bbox, query_feat, mlvl_feats, img_metas)
 
@@ -346,7 +360,6 @@ class AdaptiveMixing(nn.Module):
         assert G == self.n_groups
         assert P == self.in_points
         assert C == self.eff_in_dim
-
         '''generate mixing parameters'''
         params = self.parameter_generator(query)
         params = params.reshape(B*Q, G, -1)
