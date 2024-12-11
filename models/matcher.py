@@ -48,7 +48,6 @@ def batch_sigmoid_ce_loss(inputs: torch.Tensor, targets: torch.Tensor, mask_came
         Loss tensor
     """
     hw = inputs.shape[1]
-    
     if mask_camera is not None:
         mask_camera = mask_camera.to(torch.int32)
         mask_camera = mask_camera[None].expand(inputs.shape[0], mask_camera.shape[-1])
@@ -118,7 +117,6 @@ class HungarianMatcher(BaseModule):
         bs, num_queries = class_pred.shape[:2]
 
         indices = []
-
         # Iterate through batch size
         for b in range(bs):
             mask_camera_b = mask_camera[b] if mask_camera is not None else None
@@ -145,13 +143,11 @@ class HungarianMatcher(BaseModule):
             # all masks share the same set of points for efficient matching!
             tgt_mask = tgt_mask.view(tgt_mask.shape[0], -1)
             out_mask = out_mask.view(out_mask.shape[0], -1)
-
             with autocast(enabled=False):
                 out_mask = out_mask.float()
                 tgt_mask = tgt_mask.float()
                 # Compute the focal loss between masks
                 cost_mask = batch_sigmoid_ce_loss(out_mask, tgt_mask, mask_camera_b)
-
                 # Compute the dice loss betwen masks
                 cost_dice = batch_dice_loss(out_mask, tgt_mask, mask_camera_b)
             

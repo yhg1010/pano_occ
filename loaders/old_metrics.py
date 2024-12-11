@@ -63,9 +63,9 @@ class Metric_mIoU():
         self.use_image_mask = use_image_mask
         self.num_classes = num_classes
 
-        self.point_cloud_range = [-40.0, -40.0, -1.0, 40.0, 40.0, 5.4]
-        self.occupancy_size = [0.4, 0.4, 0.4]
-        self.voxel_size = 0.4
+        self.point_cloud_range = [-50.0, -50.0, -5.0, 50.0, 50.0, 3.0]
+        self.occupancy_size = [0.5, 0.5, 0.5]
+        self.voxel_size = 0.5
         self.occ_xdim = int((self.point_cloud_range[3] - self.point_cloud_range[0]) / self.occupancy_size[0])
         self.occ_ydim = int((self.point_cloud_range[4] - self.point_cloud_range[1]) / self.occupancy_size[1])
         self.occ_zdim = int((self.point_cloud_range[5] - self.point_cloud_range[2]) / self.occupancy_size[2])
@@ -88,6 +88,7 @@ class Metric_mIoU():
         Returns:
             tuple:(hist, correctly number_predicted_labels, num_labelled_sample)
         """
+        # import ipdb; ipdb.set_trace()
         assert pred.shape == gt.shape
         k = (gt >= 0) & (gt < n_cl)  # exclude 255
         labeled = np.sum(k)
@@ -102,12 +103,14 @@ class Metric_mIoU():
         )
 
     def per_class_iu(self, hist):
+        # import ipdb; ipdb.set_trace()
         #return np.diag(hist) / (hist.sum(1) + hist.sum(0) - np.diag(hist))
         result = np.diag(hist) / (hist.sum(1) + hist.sum(0) - np.diag(hist))
         result[hist.sum(1) == 0] = float('nan')
         return result
 
     def compute_mIoU(self, pred, label, n_classes):
+        # import ipdb; ipdb.set_trace()
         hist = np.zeros((n_classes, n_classes))
         new_hist, correct, labeled = self.hist_info(n_classes, pred.flatten(), label.flatten())
         hist += new_hist
@@ -117,7 +120,7 @@ class Metric_mIoU():
         # print('===> mIoU: ' + str(round(np.nanmean(mIoUs) * 100, 2)))
         return round(np.nanmean(mIoUs) * 100, 2), hist
 
-    def add_batch(self,semantics_pred,semantics_gt,mask_lidar,mask_camera):
+    def add_batch(self,semantics_pred,semantics_gt,ignore_mask=None,mask_lidar=None,mask_camera=None):
         self.cnt += 1
         if self.use_image_mask:
             masked_semantics_gt = semantics_gt[mask_camera]
@@ -125,6 +128,9 @@ class Metric_mIoU():
         elif self.use_lidar_mask:
             masked_semantics_gt = semantics_gt[mask_lidar]
             masked_semantics_pred = semantics_pred[mask_lidar]
+        elif ignore_mask is not None:
+            masked_semantics_gt = semantics_gt[ignore_mask]
+            masked_semantics_pred = semantics_pred[ignore_mask]
         else:
             masked_semantics_gt = semantics_gt
             masked_semantics_pred = semantics_pred
@@ -141,6 +147,7 @@ class Metric_mIoU():
         self.hist += _hist
 
     def count_miou(self):
+        # import ipdb; ipdb.set_trace()
         mIoU = self.per_class_iu(self.hist)
         # assert cnt == num_samples, 'some samples are not included in the miou calculation'
         print(f'===> per class IoU of {self.cnt} samples:')
@@ -150,7 +157,10 @@ class Metric_mIoU():
         print(f'===> mIoU of {self.cnt} samples: ' + str(round(np.nanmean(mIoU[:self.num_classes-1]) * 100, 2)))
         # print(f'===> sample-wise averaged mIoU of {cnt} samples: ' + str(round(np.nanmean(mIoU_avg), 2)))
 
-        return round(np.nanmean(mIoU[:self.num_classes-1]) * 100, 2)
+        return {
+            'mIoU': round(np.nanmean(mIoU[:self.num_classes-1]) * 100, 2),
+            'per_IoU': mIoU[:self.num_classes-1] * 100
+        }
 
 
 class Metric_FScore():
@@ -390,7 +400,7 @@ class Metric_Panoptic():
         self.pan_fp = np.zeros(self.num_classes, dtype=int)
         self.pan_fn = np.zeros(self.num_classes, dtype=int)
         
-    def add_batch(self,semantics_pred,semantics_gt,instances_pred,instances_gt,mask_lidar,mask_camera):
+    def add_batch(self,semantics_pred,semantics_gt,instances_pred,instances_gt,mask_lidar=None,mask_camera=None):
         self.cnt += 1
         if self.use_image_mask:
             masked_semantics_gt = semantics_gt[mask_camera]
@@ -420,39 +430,39 @@ class Metric_Panoptic():
             instances_gt (np.ndarray): Instance ground truths.
         """
         # get instance_class_id from instance_gt
-        instance_class_ids = [self.num_classes - 1]
-        for i in range(1, instances_gt.max() + 1):
-            class_id = np.unique(semantics_gt[instances_gt == i])
-            # assert class_id.shape[0] == 1, "each instance must belong to only one class"
-            if class_id.shape[0] == 1:
-                instance_class_ids.append(class_id[0])
-            else:
-                instance_class_ids.append(self.num_classes - 1)
-        instance_class_ids = np.array(instance_class_ids)
+        # instance_class_ids = [self.num_classes - 1]
+        # for i in range(1, instances_gt.max() + 1):
+        #     class_id = np.unique(semantics_gt[instances_gt == i])
+        #     # assert class_id.shape[0] == 1, "each instance must belong to only one class"
+        #     if class_id.shape[0] == 1:
+        #         instance_class_ids.append(class_id[0])
+        #     else:
+        #         instance_class_ids.append(self.num_classes - 1)
+        # instance_class_ids = np.array(instance_class_ids)
 
-        instance_count = 1
-        final_instance_class_ids = []
-        final_instances = np.zeros_like(instances_gt)  # empty space has instance id "0"
+        # instance_count = 1
+        # final_instance_class_ids = []
+        # final_instances = np.zeros_like(instances_gt)  # empty space has instance id "0"
 
-        for class_id in range(self.num_classes - 1):
-            if np.sum(semantics_gt == class_id) == 0:
-                continue
+        # for class_id in range(self.num_classes - 1):
+        #     if np.sum(semantics_gt == class_id) == 0:
+        #         continue
 
-            if self.class_names[class_id] in ['car', 'truck', 'construction_vehicle', 'bus', 'trailer', 'motorcycle', 'bicycle', 'pedestrian']:
-                # treat as instances
-                for instance_id in range(len(instance_class_ids)):
-                    if instance_class_ids[instance_id] != class_id:
-                        continue
-                    final_instances[instances_gt == instance_id] = instance_count
-                    instance_count += 1
-                    final_instance_class_ids.append(class_id)
-            else:
-                # treat as semantics
-                final_instances[semantics_gt == class_id] = instance_count
-                instance_count += 1
-                final_instance_class_ids.append(class_id)
+        #     if self.class_names[class_id] in ['car', 'truck', 'construction_vehicle', 'bus', 'trailer', 'motorcycle', 'bicycle', 'pedestrian']:
+        #         # treat as instances
+        #         for instance_id in range(len(instance_class_ids)):
+        #             if instance_class_ids[instance_id] != class_id:
+        #                 continue
+        #             final_instances[instances_gt == instance_id] = instance_count
+        #             instance_count += 1
+        #             final_instance_class_ids.append(class_id)
+        #     else:
+        #         # treat as semantics
+        #         final_instances[semantics_gt == class_id] = instance_count
+        #         instance_count += 1
+        #         final_instance_class_ids.append(class_id)
                 
-        instances_gt = final_instances
+        # instances_gt = final_instances
         
         # avoid zero (ignored label)
         instances_pred = instances_pred + 1
