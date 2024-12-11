@@ -58,7 +58,6 @@ class LoadMultiViewImageFromMultiSweeps(object):
             'CAM_FRONT', 'CAM_FRONT_RIGHT', 'CAM_FRONT_LEFT',
             'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT'
         ]
-
         if len(results['sweeps']['prev']) == 0:
             for _ in range(self.sweeps_num):
                 for j in range(len(cam_types)):
@@ -81,14 +80,14 @@ class LoadMultiViewImageFromMultiSweeps(object):
                 min_interval = min(max_interval, self.train_interval[0])
                 interval = np.random.randint(min_interval, max_interval + 1)
                 choices = [(k + 1) * interval - 1 for k in range(self.sweeps_num)]
-
+            
             for idx in sorted(list(choices)):
                 sweep_idx = min(idx, len(results['sweeps']['prev']) - 1)
                 sweep = results['sweeps']['prev'][sweep_idx]
 
                 if len(sweep.keys()) < len(cam_types):
                     sweep = results['sweeps']['prev'][sweep_idx - 1]
-
+        
                 for sensor in cam_types:
                     results['img'].append(mmcv.imread(sweep[sensor]['data_path'], self.color_type))
                     results['img_timestamp'].append(sweep[sensor]['timestamp'] / 1e6)
@@ -104,7 +103,7 @@ class LoadMultiViewImageFromMultiSweeps(object):
                     ))
                     if 'ego2lidar' in results:
                         results['ego2lidar'].append(results['ego2lidar'][0])
-
+        
         return results
 
     def load_online(self, results):
@@ -157,12 +156,95 @@ class LoadMultiViewImageFromMultiSweeps(object):
     def __call__(self, results):
         if self.sweeps_num == 0:
             return results
-
+   
         world_size = get_dist_info()[1]
         if world_size == 1 and self.test_mode:
             return self.load_online(results)
         else:
             return self.load_offline(results)
+
+
+# @PIPELINES.register_module()
+# class LoadOccGTFromFile(object):
+#     def __init__(self, num_classes=18, inst_class_ids=[]):
+#         self.num_classes = num_classes
+#         self.inst_class_ids = inst_class_ids
+    
+#     def __call__(self, results):
+#         # results['occ_path'] = results['occ_path'].replace("nuscenes_occ", "nuscenes_occ_v3")
+#         occ_labels = np.load(results['occ_path'])
+        
+#         # semantics = occ_labels['semantics']  # [200, 200, 16]
+#         # mask_lidar = occ_labels['mask_lidar'].astype(np.bool_)  # [200, 200, 16]
+#         # mask_camera = occ_labels['mask_camera'].astype(np.bool_)  # [200, 200, 16]
+
+#         # results['mask_lidar'] = mask_lidar
+#         # results['mask_camera'] = mask_camera
+  
+#         voxel_semantics = np.full((200, 200, 16), 17)
+#         voxel_instances = np.zeros((200, 200, 16))
+#         coords = occ_labels[:, :3]
+#         mask = coords[..., 2] <= 15
+#         coords = coords[mask]
+#         semantic_cls = occ_labels[:, 3][mask]
+#         instance_ids = occ_labels[:, 4][mask]
+#         # ignore mask filter out instance_id==0 & semantic_cls>0 <=10
+#         ignore_mask = np.ones((200, 200, 16), dtype=bool)
+#         mask1 = (semantic_cls > 0) & (semantic_cls <= 10)
+#         mask2 = (instance_ids == 0)
+#         ignore_mask[coords[mask1 & mask2][:, 0], coords[mask1 & mask2][:, 1], coords[mask1 & mask2][:, 2]] = False
+
+#         voxel_semantics[coords[:, 0], coords[:, 1], coords[:, 2]] = semantic_cls
+#         voxel_instances[coords[:, 0], coords[:, 1], coords[:, 2]] = instance_ids
+
+#         # # instance GT
+#         # if 'instances' in occ_labels.keys():
+#         #     instances = occ_labels['instances']
+#         #     instance_class_ids = [self.num_classes - 1]  # the 0-th class is always free class
+#         #     for i in range(1, instances.max() + 1):
+#         #         class_id = np.unique(semantics[instances == i])
+#         #         assert class_id.shape[0] == 1, "each instance must belong to only one class"
+#         #         instance_class_ids.append(class_id[0])
+#         #     instance_class_ids = np.array(instance_class_ids)
+#         # else:
+#         #     instances = None
+#         #     instance_class_ids = None
+
+#         instance_class_ids = {0: self.num_classes-1}
+#         for i in range(1, instance_ids.max()+1):
+#             class_id = np.unique(semantic_cls[instance_ids==i])
+#             if len(class_id) == 0:
+#                 continue
+#             instance_class_ids[i] = class_id[0]
+
+
+#         instance_count = 0
+#         final_instance_class_ids = []
+#         final_instances = np.ones_like(voxel_semantics) * 255  # empty space has instance id "255"
+#         for class_id in range(self.num_classes - 1):
+#             if np.sum(voxel_semantics == class_id) == 0:
+#                 continue
+
+#             if class_id in self.inst_class_ids:
+#                 # assert instances is not None, 'instance annotation not found'
+#                 # treat as instances
+#                 for key, val in instance_class_ids.items():
+#                     if val != class_id:
+#                         continue
+#                     final_instances[voxel_instances == key] = instance_count
+#                     instance_count += 1
+#                     final_instance_class_ids.append(class_id)
+#             else:
+#                 # treat as semantics
+#                 final_instances[voxel_semantics == class_id] = instance_count
+#                 instance_count += 1
+#                 final_instance_class_ids.append(class_id)
+  
+#         results['voxel_semantics'] = voxel_semantics
+#         results['voxel_instances'] = final_instances
+#         results['ignore_mask'] = ignore_mask
+#         results['instance_class_ids'] = DC(to_tensor(final_instance_class_ids))
+#         return results
 
 
 @PIPELINES.register_module()
@@ -179,7 +261,6 @@ class LoadOccGTFromFile(object):
 
         # results['mask_lidar'] = mask_lidar
         # results['mask_camera'] = mask_camera
-  
         # instance GT
         if 'instances' in occ_labels.keys():
             instances = occ_labels['instances']
@@ -220,4 +301,23 @@ class LoadOccGTFromFile(object):
         results['voxel_instances'] = final_instances
         results['instance_class_ids'] = DC(to_tensor(final_instance_class_ids))
 
+        if results.get('rotate_bda', False):
+            semantics = torch.from_numpy(semantics).permute(2, 0, 1)  # [16, 200, 200]
+            semantics = rotate(semantics, results['rotate_bda'], fill=255).permute(1, 2, 0)  # [200, 200, 16]
+            results['voxel_semantics'] = semantics.numpy()
+
+            final_instances = torch.from_numpy(final_instances).permute(2, 0, 1)  # [16, 200, 200]
+            final_instances = rotate(final_instances, results['rotate_bda'], fill=255).permute(1, 2, 0)  # [200, 200, 16]
+            results['voxel_instances'] = final_instances.numpy()
+
+        if results.get('flip_dx', False):
+            results['voxel_semantics'] = results['voxel_semantics'][::-1, ...].copy()
+            results['voxel_instances'] = results['voxel_instances'][::-1, ...].copy()
+            
+        if results.get('flip_dy', False):
+            results['voxel_semantics'] = results['voxel_semantics'][:, ::-1, ...].copy()
+            results['voxel_instances'] = results['voxel_instances'][:, ::-1, ...].copy()
+
         return results
+
+

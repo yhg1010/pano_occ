@@ -1,6 +1,6 @@
 dataset_type = 'NuSceneOcc'
 dataset_root = 'data/nuscenes/'
-occ_gt_root = 'data/nuscenes/occ3d'
+occ_gt_root = '/root/data/occ3d'
 
 # If point cloud range is changed, the models should also change their point
 # cloud range accordingly
@@ -37,12 +37,12 @@ input_modality = dict(
 _dim_ = 256
 _num_points_ = 4
 _num_groups_ = 4
-_num_layers_ = 4
+_num_layers_ = 2
 _num_frames_ = 8
 _num_queries_ = 100
 _topk_training_ = [4000, 16000, 64000]
 _topk_testing_ = [2000, 8000, 32000]
-_topk_training_ = _topk_testing_
+# _topk_training_ = _topk_testing_
 
 
 model = dict(
@@ -136,7 +136,8 @@ data = dict(
         type=dataset_type,
         data_root=dataset_root,
         occ_gt_root=occ_gt_root,
-        ann_file=dataset_root + 'nuscenes_infos_train_sweep.pkl',
+        # ann_file='/root/temp/nuscenes_infos_train_sweep_v3.pkl',
+        ann_file='/root/data/occ3d_pkl/nuscenes_infos_train_sweep.pkl',
         pipeline=train_pipeline,
         classes=det_class_names,
         modality=input_modality,
@@ -145,7 +146,8 @@ data = dict(
         type=dataset_type,
         data_root=dataset_root,
         occ_gt_root=occ_gt_root,
-        ann_file=dataset_root + 'nuscenes_infos_val_sweep.pkl',
+        # ann_file='/root/temp/nuscenes_infos_val_sweep_v3.pkl',
+        ann_file='/root/data/occ3d_pkl/nuscenes_infos_val_sweep.pkl',
         pipeline=test_pipeline,
         classes=det_class_names,
         modality=input_modality,
@@ -154,7 +156,8 @@ data = dict(
         type=dataset_type,
         data_root=dataset_root,
         occ_gt_root=occ_gt_root,
-        ann_file=dataset_root + 'nuscenes_infos_test_sweep.pkl',
+        # ann_file='/root/temp/nuscenes_infos_val_sweep_v3.pkl',
+        ann_file='/root/data/occ3d_pkl/nuscenes_infos_val_sweep.pkl',
         pipeline=test_pipeline,
         classes=det_class_names,
         modality=input_modality,
@@ -180,24 +183,24 @@ lr_config = dict(
     warmup_ratio=1.0 / 3,
     min_lr_ratio=1e-3
 )
-total_epochs = 48
-batch_size = 8
+total_epochs = 24
+batch_size = 1
 
 # load pretrained weights
 load_from = 'pretrain/cascade_mask_rcnn_r50_fpn_coco-20e_20e_nuim_20201009_124951-40963960.pth'
 revise_keys = [('backbone', 'img_backbone')]
+# revise_keys = []
 
 # resume the last training
 resume_from = None
-
 # checkpointing
 checkpoint_config = dict(interval=1, max_keep_ckpts=1)
 
 # logging
 log_config = dict(
-    interval=1,
+    interval=50,
     hooks=[
-        dict(type='MyTextLoggerHook', interval=1, reset_flag=True),
+        dict(type='MyTextLoggerHook', interval=50, reset_flag=True),
         dict(type='MyTensorboardLoggerHook', interval=500, reset_flag=True)
     ]
 )

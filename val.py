@@ -15,12 +15,12 @@ from mmdet3d.datasets import build_dataset, build_dataloader
 from mmdet3d.models import build_model
 
 
-def evaluate(dataset, results):
-    metrics = dataset.evaluate(results, jsonfile_prefix=None)
-
+def evaluate(dataset, results, val_loader, vis=False, vis_dir=None):
+    metrics = dataset.evaluate(results, val_loader, jsonfile_prefix=None, vis=vis, vis_dir=vis_dir)
     logging.info('--- Evaluation Results ---')
     for k, v in metrics.items():
-        logging.info('%s: %.4f' % (k, v))
+        # logging.info('%s: %.4f' % (k, v))
+        print("{0}: {1}".format(k, v))
 
     return metrics
 
@@ -99,7 +99,7 @@ def main():
     if os.path.isfile(args.weights):
         logging.info('Loading checkpoint from %s' % args.weights)
         load_checkpoint(
-            model, args.weights, map_location='cuda', strict=True,
+            model, args.weights, map_location='cuda', strict=False,
             logger=logging.Logger(__name__, logging.ERROR)
         )
 
@@ -107,9 +107,8 @@ def main():
         results = multi_gpu_test(model, val_loader, gpu_collect=True)
     else:
         results = single_gpu_test(model, val_loader)
-
     if local_rank == 0:
-        evaluate(val_dataset, results)
+        evaluate(val_dataset, results, val_loader, vis=True, vis_dir="/home/data/hongliang2/code/SparseOcc/visual")
 
 
 if __name__ == '__main__':
