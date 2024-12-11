@@ -10,7 +10,6 @@ def calc_voxel_decoder_loss(voxel_semantics, occ_loc_i, occ_pred_i, seg_pred_i, 
     loss_dict = dict()
     assert voxel_semantics.shape[0] == 1  # bs = 1
     voxel_semantics = voxel_semantics.long()
-
     occ_pred_dense, sparse_mask = sparse2dense(
         occ_loc_i, occ_pred_i,
         dense_shape=[200 // scale, 200 // scale, 16 // scale]

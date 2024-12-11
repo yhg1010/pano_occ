@@ -29,7 +29,7 @@ class SparseOccTransformer(BaseModule):
                  topk_testing=None):
         super().__init__()
         self.num_frames = num_frames
-        
+        # import ipdb; ipdb.set_trace()
         self.voxel_decoder = SparseVoxelDecoder(
             embed_dims=embed_dims,
             num_layers=3,
@@ -68,7 +68,7 @@ class SparseOccTransformer(BaseModule):
             feat = feat.permute(0, 1, 3, 2, 5, 6, 4)  # [B, T, G, N, H, W, C]
             feat = feat.reshape(B*T*G, N, H, W, C)  # [BTG, N, H, W, C]
             mlvl_feats[lvl] = feat.contiguous()
-        
+
         lidar2img = np.asarray([m['lidar2img'] for m in img_metas]).astype(np.float32)
         lidar2img = torch.from_numpy(lidar2img).to(feat.device)  # [B, N, 4, 4]
         ego2lidar = np.asarray([m['ego2lidar'] for m in img_metas]).astype(np.float32)
@@ -76,6 +76,7 @@ class SparseOccTransformer(BaseModule):
         
         img_metas = copy.deepcopy(img_metas)
         img_metas[0]['lidar2img'] = torch.matmul(lidar2img, ego2lidar)
+        # img_metas[0]['lidar2img'] = lidar2img
 
         occ_preds = self.voxel_decoder(mlvl_feats, img_metas=img_metas)
         mask_preds, class_preds = self.decoder(occ_preds, mlvl_feats, img_metas)
