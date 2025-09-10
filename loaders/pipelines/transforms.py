@@ -264,7 +264,6 @@ class RandomTransformImage(object):
         results['ori_shape'] = [img.shape for img in results['img']]
         results['img_shape'] = [img.shape for img in results['img']]
         results['pad_shape'] = [img.shape for img in results['img']]
-
         return results
 
     def img_transform(self, img, resize, resize_dims, crop, flip, rotate):
@@ -316,7 +315,7 @@ class RandomTransformImage(object):
         """
         H, W = self.ida_aug_conf['H'], self.ida_aug_conf['W']
         fH, fW = self.ida_aug_conf['final_dim']
-
+     
         if self.training:
             resize = np.random.uniform(*self.ida_aug_conf['resize_lim'])
             resize_dims = (int(W * resize), int(H * resize))

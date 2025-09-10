@@ -47,7 +47,6 @@ def encode_bbox(bboxes, pc_range=None):
     xyz = bboxes[..., 0:3].clone()
     wlh = bboxes[..., 3:6].log()
     rot = bboxes[..., 6:7]
-
     if pc_range is not None:
         xyz[..., 0] = (xyz[..., 0] - pc_range[0]) / (pc_range[3] - pc_range[0])
         xyz[..., 1] = (xyz[..., 1] - pc_range[1]) / (pc_range[4] - pc_range[1])

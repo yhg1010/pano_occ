@@ -23,13 +23,15 @@ def deconv3d_gn_relu(in_channels, out_channels, kernel_size=2, stride=2):
 
 
 def sparse2dense(indices, value, dense_shape, empty_value=0):
+    # import ipdb; ipdb.set_trace()
     B, N = indices.shape[:2]  # [B, N, 3]
-
     batch_index = torch.arange(B).unsqueeze(1).expand(B, N)
-    dense = torch.ones([B] + dense_shape, device=value.device, dtype=value.dtype) * empty_value
+    # dense = torch.ones([B] + dense_shape, device=value.device, dtype=value.dtype) * empty_value
+    dense = torch.ones(dense_shape, device=value.device, dtype=value.dtype) * empty_value
     dense[batch_index, indices[..., 0], indices[..., 1], indices[..., 2]] = value
     
-    mask = torch.zeros([B] + dense_shape, dtype=torch.bool, device=value.device)
+    # mask = torch.zeros([B] + dense_shape, dtype=torch.bool, device=value.device)
+    mask = torch.zeros(dense_shape, dtype=torch.bool, device=value.device)
     mask[batch_index, indices[..., 0], indices[..., 1], indices[..., 2]] = 1
 
     return dense, mask
@@ -81,7 +83,6 @@ def batch_indexing(batched_data: torch.Tensor, batched_indices: torch.Tensor, la
             return batched_data[indices_of_batch, batched_indices.to(torch.long)]
         else:
             return batched_data[indices_of_batch, batched_indices.to(torch.long), :]
-
     if layout == 'channel_first':
         return batch_indexing_channel_first(batched_data, batched_indices)
     elif layout == 'channel_last':

@@ -10,7 +10,7 @@ from .utils import DUMP
 from .checkpoint import checkpoint as cp
 from .sparsebev_sampling import sampling_4d, make_sample_points_from_mask
 from .sparse_voxel_decoder import SparseVoxelDecoder
-
+# from .temporalnet import TemporalNet
 
 @TRANSFORMER.register_module()
 class SparseOccTransformer(BaseModule):
@@ -29,7 +29,7 @@ class SparseOccTransformer(BaseModule):
                  topk_testing=None):
         super().__init__()
         self.num_frames = num_frames
-        
+        # import ipdb; ipdb.set_trace()
         self.voxel_decoder = SparseVoxelDecoder(
             embed_dims=embed_dims,
             num_layers=3,
@@ -68,7 +68,6 @@ class SparseOccTransformer(BaseModule):
             feat = feat.permute(0, 1, 3, 2, 5, 6, 4)  # [B, T, G, N, H, W, C]
             feat = feat.reshape(B*T*G, N, H, W, C)  # [BTG, N, H, W, C]
             mlvl_feats[lvl] = feat.contiguous()
-        
         lidar2img = np.asarray([m['lidar2img'] for m in img_metas]).astype(np.float32)
         lidar2img = torch.from_numpy(lidar2img).to(feat.device)  # [B, N, 4, 4]
         ego2lidar = np.asarray([m['ego2lidar'] for m in img_metas]).astype(np.float32)
@@ -76,6 +75,7 @@ class SparseOccTransformer(BaseModule):
         
         img_metas = copy.deepcopy(img_metas)
         img_metas[0]['lidar2img'] = torch.matmul(lidar2img, ego2lidar)
+        # img_metas[0]['lidar2img'] = lidar2img
 
         occ_preds = self.voxel_decoder(mlvl_feats, img_metas=img_metas)
         mask_preds, class_preds = self.decoder(occ_preds, mlvl_feats, img_metas)
@@ -123,6 +123,7 @@ class MaskFormerOccDecoder(BaseModule):
     def forward(self, occ_preds, mlvl_feats, img_metas):
         occ_loc, occ_pred, _, mask_feat, _ = occ_preds[-1]
         bs = mask_feat.shape[0]
+        # modify1: query feat and query pos initial
         query_feat = self.query_feat.weight[None].repeat(bs, 1, 1)
         query_pos = self.query_pos.weight[None].repeat(bs, 1, 1)
         
@@ -191,8 +192,9 @@ class MaskFormerOccDecoderLayer(BaseModule):
         query_feat = self.norm1(self.self_attn(query_feat, query_pos=query_pos))
 
         sampled_feat = self.sampling(query_feat, valid_map, occ_loc, mlvl_feats, img_metas)
+        # refine_feat_w = self.adanet(sampled_feat)
+        # Modify2: temporal focusing module
         query_feat = self.norm2(self.mixing(sampled_feat, query_feat))
-        
         query_feat = self.norm3(self.ffn(query_feat))
         
         valid_map, mask_pred, class_pred = self.pred_segmentation(query_feat, mask_feat)
@@ -242,7 +244,7 @@ class MaskFormerSelfAttention(BaseModule):
 
 
 class MaskFormerSampling(BaseModule):
-    def __init__(self, embed_dims=256, num_frames=4, num_groups=4, num_points=8, num_levels=4, pc_range=[], occ_size=[], init_cfg=None):
+    def __init__(self, embed_dims=256, num_frames=4, num_groups=4, num_points=8, num_levels=4, pc_range=[], occ_size=[], scales=[0.8, 0.9, 1.0, 1.1, 1.2], init_cfg=None):
         super().__init__(init_cfg)
 
         self.num_frames = num_frames
@@ -252,9 +254,14 @@ class MaskFormerSampling(BaseModule):
         self.pc_range = pc_range
         self.occ_size = occ_size
 
+        self.scales = scales
+        self.scale_len = len(scales)
+
         self.offset = nn.Linear(embed_dims, num_groups * num_points * 3)
-        self.scale_weights = nn.Linear(embed_dims, num_groups * num_points * num_levels)
-        
+        self.scale_weights = nn.Linear(embed_dims, num_groups * num_points * num_levels * self.scale_len)
+        self.scalesChannels = 320
+        self.depthwei2 = nn.Linear(self.scalesChannels, 2)
+
     def init_weights(self, ):
         nn.init.zeros_(self.offset.weight)
         nn.init.zeros_(self.offset.bias)
@@ -270,27 +277,37 @@ class MaskFormerSampling(BaseModule):
         # sampling offset of all frames
         offset = self.offset(query_feat).view(B, Q, self.num_groups * self.num_points, 3)  # [B, Q, GP, 3]
         sampling_points = make_sample_points_from_mask(valid_map, self.pc_range, self.occ_size, self.num_groups*self.num_points, occ_loc, offset)
-        sampling_points = sampling_points.reshape(B, Q, 1, self.num_groups, self.num_points, 3)
-        sampling_points = sampling_points.expand(B, Q, self.num_frames, self.num_groups, self.num_points, 3)
-
+        sampling_points = sampling_points.reshape(B, Q, 1, self.num_groups, self.num_points, 1, 3)
+        sampling_points = sampling_points.expand(B, Q, self.num_frames, self.num_groups, self.num_points, self.scale_len, 3)
+        # sampling_points = sampling_points.unsqueeze(5).repeat(1, 1, 1, 1, 1, self.scale_len, 1)
+        scales = self.scales
+        scales = torch.tensor(scales, dtype=torch.float32).to(sampling_points.device)
+        scales = scales.unsqueeze(1).repeat(1, 3)
+        cur_line_ref_points = sampling_points * scales
+        
         # scale weights
-        scale_weights = self.scale_weights(query_feat).view(B, Q, self.num_groups, 1, self.num_points, self.num_levels)
+        scale_weights = self.scale_weights(query_feat).view(B, Q, self.num_groups, 1, self.num_points, self.scale_len, self.num_levels)
         scale_weights = torch.softmax(scale_weights, dim=-1)
-        scale_weights = scale_weights.expand(B, Q, self.num_groups, self.num_frames, self.num_points, self.num_levels)
+        scale_weights = scale_weights.expand(B, Q, self.num_groups, self.num_frames, self.num_points, self.scale_len, self.num_levels)
 
         # sampling
-        sampled_feats = sampling_4d(
-            sampling_points,
+        sampled_feats, voxel_feat = sampling_4d(
+            cur_line_ref_points,
             mlvl_feats,
             scale_weights,
             img_metas[0]['lidar2img'],
             image_h, image_w
         )  # [B, Q, G, FP, C]
 
-        return sampled_feats
+        refine_feat_w = self.depthwei2(sampled_feats.permute(0, 2, 3, 4, 1))
+        # refine_feat_w = refine_feat_w.permute(0, 2, 3, 4, 1)
+        updated_sampled_feat = voxel_feat * refine_feat_w[..., 1:].sigmoid()
+
+        return updated_sampled_feat
 
     def forward(self, query_feat, valid_map, occ_loc,  mlvl_feats, img_metas):
         if self.training and query_feat.requires_grad:
             return cp(self.inner_forward, query_feat, valid_map, occ_loc, mlvl_feats, img_metas, use_reentrant=False)
+            # return self.inner_forward(query_feat, valid_map, occ_loc, mlvl_feats, img_metas)
         else:
             return self.inner_forward(query_feat, valid_map, occ_loc, mlvl_feats, img_metas)

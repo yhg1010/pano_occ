@@ -112,14 +112,14 @@ class SparseOcc(MVXTwoStageDetector):
 
         return img_feats_reshaped
 
-    def forward_pts_train(self, mlvl_feats, voxel_semantics, voxel_instances, instance_class_ids, mask_camera, img_metas):
+    def forward_pts_train(self, mlvl_feats, voxel_semantics, voxel_instances, instance_class_ids, ignore_mask, mask_camera, img_metas):
         """
         voxel_semantics: [bs, 200, 200, 16], value in range [0, num_cls - 1]
         voxel_instances: [bs, 200, 200, 16], value in range [0, num_obj - 1]
         instance_class_ids: [[bs0_num_obj], [bs1_num_obj], ...], value in range [0, num_cls - 1]
         """
         outs = self.pts_bbox_head(mlvl_feats, img_metas)
-        loss_inputs = [voxel_semantics, voxel_instances, instance_class_ids, outs]
+        loss_inputs = [voxel_semantics, voxel_instances, instance_class_ids, outs, ignore_mask]
         return self.pts_bbox_head.loss(*loss_inputs)
 
     def forward(self, return_loss=True, **kwargs):
@@ -129,9 +129,9 @@ class SparseOcc(MVXTwoStageDetector):
             return self.forward_test(**kwargs)
 
     @force_fp32(apply_to=('img'))
-    def forward_train(self, img_metas=None, img=None, voxel_semantics=None, voxel_instances=None, instance_class_ids=None, mask_camera=None, **kwargs):
+    def forward_train(self, img_metas=None, img=None, voxel_semantics=None, voxel_instances=None, instance_class_ids=None, ignore_mask=None, mask_camera=None, **kwargs):
         img_feats = self.extract_feat(img=img, img_metas=img_metas)
-        return self.forward_pts_train(img_feats, voxel_semantics, voxel_instances, instance_class_ids, mask_camera, img_metas)
+        return self.forward_pts_train(img_feats, voxel_semantics, voxel_instances, instance_class_ids, ignore_mask, mask_camera, img_metas)
 
     def forward_test(self, img_metas, img=None, **kwargs):
         output = self.simple_test(img_metas, img)
@@ -169,6 +169,7 @@ class SparseOcc(MVXTwoStageDetector):
             return self.simple_test_online(img_metas, img, rescale)
         else:  # offline
             return self.simple_test_offline(img_metas, img, rescale)
+        # return self.simple_test_offline(img_metas, img, rescale)
 
     def simple_test_offline(self, img_metas, img=None, rescale=False):
         img_feats = self.extract_feat(img=img, img_metas=img_metas)
@@ -191,7 +192,6 @@ class SparseOcc(MVXTwoStageDetector):
         img_metas[0]['pad_shape'] = [img_shape for _ in range(len(img_filenames))]
 
         img_feats_list, img_metas_list = [], []
-
         # extract feature frame by frame
         for i in range(num_frames):
             img_indices = list(np.arange(i * 6, (i + 1) * 6))
