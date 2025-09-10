@@ -8,9 +8,9 @@ from torch.utils.cpp_extension import load
 from tqdm import tqdm
 from prettytable import PrettyTable
 from .ray_pq import Metric_RayPQ
+from .old_metrics import Metric_Panoptic, Metric_mIoU
 
-
-dvr = load("dvr", sources=["lib/dvr/dvr.cpp", "lib/dvr/dvr.cu"], verbose=True, extra_cuda_cflags=['-allow-unsupported-compiler'])
+# dvr = load("dvr", sources=["lib/dvr/dvr.cpp", "lib/dvr/dvr.cu"], verbose=True, extra_cuda_cflags=['-allow-unsupported-compiler'])
 _pc_range = [-40, -40, -1.0, 40, 40, 5.4]
 _voxel_size = 0.4
 
@@ -275,3 +275,186 @@ def main_raypq(sem_pred_list, sem_gt_list, inst_pred_list, inst_gt_list, lidar_o
     torch.cuda.empty_cache()
 
     return eval_metrics_pq.count_pq()
+
+
+def main_pq(sem_pred_list, sem_gt_list, inst_pred_list, inst_gt_list):
+    eval_metrics_pq = Metric_Panoptic()
+
+    for sem_pred, sem_gt, inst_pred, inst_gt in \
+        tqdm(zip(sem_pred_list, sem_gt_list, inst_pred_list, inst_gt_list), ncols=50):
+        # inst_gt = inst_gt.astype(np.int)
+        eval_metrics_pq.add_batch(sem_pred, sem_gt, inst_pred, inst_gt)
+    
+    return eval_metrics_pq.count_pq()
+
+def main_iou(sem_pred_list, sem_gt_list, ignore_masks):
+    eval_miou = Metric_mIoU()
+
+    for sem_pred, sem_gt, ignore_mask in tqdm(zip(sem_pred_list, sem_gt_list, ignore_masks), ncols=50):
+        valid_mask = sem_gt != 17
+        sem_pred = sem_pred[valid_mask]
+        sem_gt = sem_gt[valid_mask]
+        ignore_mask = ignore_mask[valid_mask]
+        eval_miou.add_batch(sem_pred, sem_gt.numpy(), ignore_mask)
+    
+    return eval_miou.count_miou()
+
+
+def main_iou2(sem_pred_list, sem_gt_list):
+    results = []
+    for i in range(len(sem_pred_list)):
+        gt_i, pred_i = sem_gt_list[i].numpy(), sem_pred_list[i]
+        # gt_i = gt_to_voxel(gt_i, img_metas)
+        gt_i = gt_i.squeeze()
+        mask = (gt_i != 17)
+        score = np.zeros((18, 3))
+        for j in range(18):
+            if j == 17: #class 0 for geometry IoU
+                score[j][0] += ((gt_i!=17) * (pred_i!=17)).sum()
+                score[j][1] += (gt_i!=17).sum()
+                score[j][2] += (pred_i!=17).sum()
+            else:
+                score[j][0] += ((gt_i == j) * (pred_i == j)).sum()
+                score[j][1] += (gt_i == j).sum()
+                score[j][2] += (pred_i == j).sum()
+
+        results.append(score)
+    
+    results = np.stack(results, axis=0)
+    import ipdb; ipdb.set_trace()
+    class_names = {17: 'IoU'}
+    class_num = 18
+    occ_class_names = [
+        'others', 'barrier', 'bicycle', 'bus', 'car', 'construction_vehicle',
+        'motorcycle', 'pedestrian', 'traffic_cone', 'trailer', 'truck',
+        'driveable_surface', 'other_flat', 'sidewalk',
+        'terrain', 'manmade', 'vegetation'
+    ]
+    for i, name in enumerate(occ_class_names):
+        class_names[i] = occ_class_names[i]
+    
+    results = np.stack(results, axis=0).mean(0)
+    mean_ious = []
+    results_dict = {}
+    import ipdb; ipdb.set_trace()
+    for i in range(class_num):
+        tp = results[i, 0]
+        p = results[i, 1]
+        g = results[i, 2]
+        union = p + g - tp
+        mean_ious.append(tp / union)
+    
+    for i in range(class_num):
+        results_dict[class_names[i]] = mean_ious[i]
+    import ipdb; ipdb.set_trace()
+    results_dict['mIoU'] = np.nanmean(np.array(mean_ious)[0:-1])
+    print(results_dict)
+
+
+
+def convert_to_voxel_list(pano_sem_results, pano_inst_results, voxel_semantics, voxel_instances, ignore_masks=None):
+    batch_size = len(pano_sem_results)
+    results = []
+    for i in range(batch_size):
+        pano_sem = pano_sem_results[i][ignore_masks[i]].reshape(-1)
+        pano_inst = pano_inst_results[i][ignore_masks[i]].reshape(-1)
+        voxel_sem = voxel_semantics[i][ignore_masks[i]].reshape(-1).numpy()
+        voxel_inst = voxel_instances[i][ignore_masks[i]].reshape(-1).numpy()
+
+        # # Filter out empty voxels
+        # valid_indices = pano_sem != 17
+        # pano_sem = pano_sem[valid_indices]
+        # pano_inst = pano_inst[valid_indices]
+        # import ipdb; ipdb.set_trace()
+        # valid_indices = voxel_sem != 17
+        # voxel_sem = voxel_sem[valid_indices]
+        # voxel_inst = voxel_inst[valid_indices]
+
+        # # Filter out instance id 255 in ground truth
+        # valid_indices = voxel_inst != 255
+        # voxel_sem = voxel_sem[valid_indices]
+        # voxel_inst = voxel_inst[valid_indices]
+
+        results.append((pano_sem, pano_inst, voxel_sem, voxel_inst))
+
+    return results
+
+def compute_pq_single(pano_sem, pano_inst, voxel_sem, voxel_inst):
+    classes_pred = np.unique(pano_sem)
+    num_classes = len(classes_pred)
+    # import ipdb; ipdb.set_trace()
+    tp = np.zeros(17)
+    fp = np.zeros(17)
+    fn = np.zeros(17)
+    iou_sum = np.zeros(17)
+
+    for gt_id in np.unique(voxel_inst):
+        if gt_id == 255:
+            continue
+        gt_mask = voxel_inst == gt_id
+        gt_class = np.unique(voxel_sem[gt_mask])
+        # import ipdb; ipdb.set_trace()
+        if len(gt_class) != 1:
+            continue
+        gt_class = gt_class[0]
+
+        matched_pred_idx = -1
+        max_iou = 0
+        for pred_id in np.unique(pano_inst):
+            pred_mask = pano_inst == pred_id
+            pred_class = np.unique(pano_sem[pred_mask])
+            if len(pred_class) != 1 or pred_class[0] != gt_class:
+                continue
+
+            pred_class = pred_class[0]
+            intersection = np.sum(pred_mask & gt_mask)
+            union = np.sum(pred_mask | gt_mask)
+            iou = intersection / union if union > 0 else 0
+
+            if iou > max_iou:
+                max_iou = iou
+                matched_pred_idx = pred_id
+
+        if max_iou > 0.:
+            tp[gt_class] += 1
+            iou_sum[gt_class] += max_iou
+        else:
+            fn[gt_class] += 1
+
+    for pred_id in np.unique(pano_inst):
+        pred_mask = pano_inst == pred_id
+        pred_class = np.unique(pano_sem[pred_mask])
+        if len(pred_class) != 1:
+            continue
+        pred_class = pred_class[0]
+        if not any(np.sum(pred_mask & (voxel_inst == gt_id)) > 0 for gt_id in np.unique(voxel_inst)):
+            fp[pred_class] += 1
+
+    pq = np.zeros(17)
+    for c in range(17):
+        if tp[c] + fp[c] + fn[c] > 0:
+            pq[c] = iou_sum[c] / (tp[c] + 0.5 * fp[c] + 0.5 * fn[c])
+
+    pq_mean = np.mean(pq)
+    # import ipdb; ipdb.set_trace()
+    return pq_mean, pq
+
+from tqdm import tqdm
+
+def compute_pq_batch(pano_sem_results, voxel_semantics, pano_inst_results, voxel_instances, ignore_masks=None):
+    converted_data = convert_to_voxel_list(pano_sem_results, pano_inst_results, voxel_semantics, voxel_instances, ignore_masks)
+    total_pq = np.zeros(17)  # assuming 18 classes including background
+    count = np.zeros(17)
+    # import ipdb; ipdb.set_trace()
+    for pano_sem, pano_inst, voxel_sem, voxel_inst in tqdm(converted_data):
+        pq_mean, pq_per_class = compute_pq_single(pano_sem, pano_inst, voxel_sem, voxel_inst)
+        total_pq += pq_per_class
+        count += (pq_per_class > 0)
+
+    avg_pq_per_class = total_pq / np.maximum(count, 1)
+    avg_pq = np.mean(avg_pq_per_class)
+    return {
+        'PQ': avg_pq,
+        'PQ per class': avg_pq_per_class
+    }
+    # return avg_pq, avg_pq_per_class

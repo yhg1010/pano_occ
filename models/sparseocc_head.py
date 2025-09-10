@@ -43,7 +43,6 @@ class SparseOccHead(nn.Module):
             mlvl_feats,
             img_metas=img_metas,
         )
-        
         return {
             'occ_preds': occ_preds, 
             'mask_preds': mask_preds, 
@@ -51,16 +50,18 @@ class SparseOccHead(nn.Module):
         }
 
     @force_fp32(apply_to=('preds_dicts'))
-    def loss(self, voxel_semantics, voxel_instances, instance_class_ids, preds_dicts, mask_camera=None):
-        return self.loss_single(voxel_semantics, voxel_instances, instance_class_ids, preds_dicts, mask_camera)
+    def loss(self, voxel_semantics, voxel_instances, instance_class_ids, preds_dicts, ignore_mask=None, mask_camera=None):
+        return self.loss_single(voxel_semantics, voxel_instances, instance_class_ids, preds_dicts, ignore_mask, mask_camera)
 
-    def loss_single(self, voxel_semantics, voxel_instances, instance_class_ids, preds_dicts, mask_camera=None):
+    def loss_single(self, voxel_semantics, voxel_instances, instance_class_ids, preds_dicts, ignore_mask, mask_camera=None):
         loss_dict = {}
         B = voxel_instances.shape[0]
-
-        if mask_camera is not None:
-            assert mask_camera.shape == voxel_semantics.shape
-            assert mask_camera.dtype == torch.bool
+        # if mask_camera is not None:
+        #     assert mask_camera.shape == voxel_semantics.shape
+        #     assert mask_camera.dtype == torch.bool
+        if ignore_mask is not None:
+            assert ignore_mask.shape == voxel_semantics.shape
+            assert ignore_mask.dtype == torch.bool
         
         for i, (occ_loc_i, occ_pred_i, seg_pred_i, _, scale) in enumerate(preds_dicts['occ_preds']):
             loss_dict_i = {}
@@ -72,7 +73,8 @@ class SparseOccHead(nn.Module):
                     seg_pred_i[b:b + 1] if seg_pred_i is not None else None,
                     scale,
                     self.num_classes,
-                    mask_camera[b:b + 1] if mask_camera is not None else None
+                    # mask_camera[b:b + 1] if mask_camera is not None else None
+                    ignore_mask[b:b + 1] if ignore_mask is not None else None
                 )
                 for loss_key in loss_dict_i_b.keys():
                     loss_dict_i[loss_key] = loss_dict_i.get(loss_key, 0) + loss_dict_i_b[loss_key] / B
@@ -86,10 +88,12 @@ class SparseOccHead(nn.Module):
         occ_loc = occ_loc.reshape(-1, 3)
         voxel_instances = voxel_instances[batch_idx.reshape(-1), occ_loc[..., 0], occ_loc[..., 1], occ_loc[..., 2]]
         voxel_instances = voxel_instances.reshape(B, -1)  # [B, N]
-
-        if mask_camera is not None:
-            mask_camera = mask_camera[batch_idx.reshape(-1), occ_loc[..., 0], occ_loc[..., 1], occ_loc[..., 2]]
-            mask_camera = mask_camera.reshape(B, -1)  # [B, N]
+        # if mask_camera is not None:
+        #     mask_camera = mask_camera[batch_idx.reshape(-1), occ_loc[..., 0], occ_loc[..., 1], occ_loc[..., 2]]
+        #     mask_camera = mask_camera.reshape(B, -1)  # [B, N]
+        if ignore_mask is not None:
+            ignore_mask = ignore_mask[batch_idx.reshape(-1), occ_loc[..., 0], occ_loc[..., 1], occ_loc[..., 2]]
+            ignore_mask = ignore_mask.reshape(B, -1)
         
         # drop instances if it has no positive voxels
         for b in range(B):
@@ -101,9 +105,12 @@ class SparseOccHead(nn.Module):
             instance_class_ids[b] = instance_class_ids[b][instance_voxel_counts[:instance_count] > 0]
 
         for i, pred in enumerate(preds_dicts['mask_preds']):
-            indices = self.matcher(pred, preds_dicts['class_preds'][i], voxel_instances, instance_class_ids, mask_camera)
+            # indices = self.matcher(pred, preds_dicts['class_preds'][i], voxel_instances, instance_class_ids, mask_camera)
+            indices = self.matcher(pred, preds_dicts['class_preds'][i], voxel_instances, instance_class_ids, ignore_mask)
+            # loss_mask, loss_dice, loss_class = self.criterions['loss_mask2former'](
+            #     pred, preds_dicts['class_preds'][i], voxel_instances, instance_class_ids, indices, mask_camera)
             loss_mask, loss_dice, loss_class = self.criterions['loss_mask2former'](
-                pred, preds_dicts['class_preds'][i], voxel_instances, instance_class_ids, indices, mask_camera)
+                pred, preds_dicts['class_preds'][i], voxel_instances, instance_class_ids, indices, ignore_mask)
             loss_dict['loss_mask_{:d}'.format(i)] = loss_mask
             loss_dict['loss_dice_mask_{:d}'.format(i)] = loss_dice
             loss_dict['loss_class_{:d}'.format(i)] = loss_class
@@ -114,11 +121,9 @@ class SparseOccHead(nn.Module):
         mask_cls = outs['class_preds'][-1].sigmoid()
         mask_pred = outs['mask_preds'][-1].sigmoid()
         occ_indices = outs['occ_preds'][-1][0]
-        
         sem_pred = self.merge_semseg(mask_cls, mask_pred)  # [B, C, N]
         outs['sem_pred'] = sem_pred
         outs['occ_loc'] = occ_indices
-
         if self.panoptic:
             pano_inst, pano_sem = self.merge_panoseg(mask_cls, mask_pred)  # [B, C, N]
             outs['pano_inst'] = pano_inst
@@ -158,7 +163,6 @@ class SparseOccHead(nn.Module):
     def merge_panoseg_single(self, mask_cls, mask_pred):
         assert mask_cls.shape[0] == 1, "bs != 1"
         scores, labels = mask_cls.max(-1)
-        
         # filter out low score and background instances
         keep = labels.ne(self.num_classes - 1) & (scores > self.score_threshold)
         cur_scores = scores[keep]
